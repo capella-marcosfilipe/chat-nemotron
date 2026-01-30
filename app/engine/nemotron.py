@@ -1,4 +1,3 @@
-# engine/nemotron.py
 """
 Nemotron engine with automatic GPU/API fallback.
 """
