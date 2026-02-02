@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException
-from service.queue_service import queue_service, QueueType
-from worker.chat_worker import ChatWorker
-from model import ChatRequest, ChatAsyncResponse, SystemInfoResponse, ExecutionMode, JobStatus
-from engine.nemotron import nemotron_engine
-from service.nemotron_service import nemotron_service
-from middleware.idempotency import idempotency
-from utils.logger import logger
+from app.service.queue_service import queue_service, QueueType
+from app.worker.chat_worker import ChatWorker
+from app.model import ChatRequest, ChatAsyncResponse, SystemInfoResponse, ExecutionMode, JobStatus
+from app.engine.nemotron import nemotron_engine
+from app.service.nemotron_service import nemotron_service
+from app.middleware.idempotency import idempotency
+from app.utils.logger import logger
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])

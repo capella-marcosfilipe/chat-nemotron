@@ -1,9 +1,10 @@
 import asyncio
-from typing import Callable, TypeVar, Type
 from functools import wraps
-from config.settings import settings
-from model.error import ErrorCode
-from utils.logger import logger
+from typing import Callable, Type, TypeVar
+
+from app.config.settings import settings
+from app.model.error import ErrorCode
+from app.utils.logger import logger
 
 T = TypeVar('T')
 

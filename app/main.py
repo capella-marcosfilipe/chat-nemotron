@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from controller.chat_controller import router as chat_router
-from config.settings import settings
+from app.controller.chat_controller import router as chat_router
+from app.config.settings import settings
 
 app = FastAPI(
     title=settings.APP_NAME,

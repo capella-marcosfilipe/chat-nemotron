@@ -4,9 +4,9 @@ from typing import Callable, Literal, Optional
 
 from aio_pika import Message, connect_robust
 from aio_pika.abc import AbstractChannel, AbstractConnection, AbstractQueue
-from config.settings import settings
-from model import ChatAsyncResponse, ChatRequest
-from utils.logger import logger
+from app.config.settings import settings
+from app.model import ChatAsyncResponse, ChatRequest
+from app.utils.logger import logger
 
 QueueType = Literal["gpu", "api"]
 

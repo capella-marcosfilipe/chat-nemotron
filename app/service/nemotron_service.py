@@ -1,9 +1,10 @@
 from typing import Generator
 
 import torch
-from engine.nemotron import EngineMode, nemotron_engine
 from openai.types.chat import (ChatCompletionSystemMessageParam,
                                ChatCompletionUserMessageParam)
+
+from app.engine.nemotron import EngineMode, nemotron_engine
 
 
 class NemotronService:

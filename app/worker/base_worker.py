@@ -1,4 +1,3 @@
-"""Base worker class with common functionality."""
 import asyncio
 import json
 import signal
@@ -7,26 +6,26 @@ from datetime import datetime
 from typing import Optional
 
 from aio_pika.abc import AbstractIncomingMessage
-from config.settings import settings
-from model import ChatAsyncResponse, ChatRequest, ChatResponse, JobStatus
-from service.queue_service import QueueType, queue_service
-from utils.cache import redis_cache
-from utils.logger import logger
-from utils.retry import retry_policy
+from app.config.settings import settings
+from app.model import ChatAsyncResponse, ChatRequest, ChatResponse, JobStatus
+from app.service.queue_service import queue_service, QueueType
+from app.utils.cache import redis_cache
+from app.utils.logger import logger
+from app.utils.retry import retry_policy
 
 
 class BaseWorker(ABC):
-    """Base class for all workers."""
+    """Base class for specialized workers."""
     
-    def __init__(self, worker_type: QueueType):
-        self.worker_type = worker_type
+    def __init__(self, queue_type: QueueType):
+        self.queue_type: QueueType = queue_type
         self.is_running = False
         self.queue = queue_service
         self.cache = redis_cache
     
     async def start(self):
         """Start the worker."""
-        logger.info(f"🚀 Starting {self.worker_type.upper()} Worker...")
+        logger.info(f"🚀 Starting {self.queue_type.upper()} Worker...")
         
         # Connect to services
         await self.cache.connect()
@@ -36,13 +35,13 @@ class BaseWorker(ABC):
         self._setup_signal_handlers()
         
         self.is_running = True
-        logger.info(f"✅ {self.worker_type.upper()} Worker ready")
+        logger.info(f"✅ {self.queue_type.upper()} Worker ready to process messages")
         
         # Start consuming
         try:
-            await self.queue.consume_queue(self.worker_type, self.process_message)
+            await self.queue.consume_queue(self.queue_type, self.process_message)
         except asyncio.CancelledError:
-            logger.info(f"{self.worker_type.upper()} Worker consumption cancelled")
+            logger.info(f"{self.queue_type.upper()} Worker consumption cancelled")
     
     def _setup_signal_handlers(self):
         """Setup graceful shutdown on SIGINT/SIGTERM."""
@@ -56,13 +55,13 @@ class BaseWorker(ABC):
     
     async def shutdown(self):
         """Graceful shutdown."""
-        logger.info(f"🛑 Shutting down {self.worker_type.upper()} worker...")
+        logger.info(f"🛑 Shutting down {self.queue_type.upper()} worker...")
         self.is_running = False
         
         await self.queue.disconnect()
         await self.cache.disconnect()
         
-        logger.info(f"✅ {self.worker_type.upper()} Worker shutdown complete")
+        logger.info(f"✅ {self.queue_type.upper()} Worker shutdown complete")
     
     async def process_message(self, message: AbstractIncomingMessage, queue_type: QueueType):
         """Process a single message from the queue."""
@@ -76,15 +75,15 @@ class BaseWorker(ABC):
             target_mode = body.get("target_mode")
             
             logger.info(
-                f"📨 [{self.worker_type.upper()}] Processing job {job_id} | "
+                f"📨 [{self.queue_type.upper()}] Processing job {job_id} | "
                 f"target_mode: {target_mode}"
             )
             
             # Validate message is for this worker
-            if target_mode != self.worker_type:
+            if target_mode != self.queue_type:
                 logger.warning(
                     f"⚠️  Job {job_id} target_mode={target_mode} but received by "
-                    f"{self.worker_type} worker. Skipping."
+                    f"{self.queue_type} worker. Skipping."
                 )
                 return
             
@@ -104,11 +103,11 @@ class BaseWorker(ABC):
                 result=result
             )
             
-            logger.info(f"✅ [{self.worker_type.upper()}] Job {job_id} completed")
+            logger.info(f"✅ [{self.queue_type.upper()}] Job {job_id} completed successfully")
         
         except Exception as e:
             logger.error(
-                f"❌ [{self.worker_type.upper()}] Job {job_id} failed: {e}",
+                f"❌ [{self.queue_type.upper()}] Job {job_id} failed: {e}",
                 exc_info=True
             )
             
@@ -138,7 +137,7 @@ class BaseWorker(ABC):
             
             return ChatResponse(
                 response=response_text,
-                mode=self.worker_type,
+                mode=self.queue_type,
                 latency_ms=round(latency_ms, 2)
             )
         
@@ -168,7 +167,6 @@ class BaseWorker(ABC):
     ):
         """Update job status in Redis and publish to response queue."""
         
-        # Create response object
         async_response = ChatAsyncResponse(
             job_id=job_id,
             status=status,
@@ -177,7 +175,6 @@ class BaseWorker(ABC):
             error=error
         )
         
-        # Store in Redis
         cache_key = f"job:{job_id}"
         await self.cache.set(
             cache_key,
@@ -185,23 +182,5 @@ class BaseWorker(ABC):
             ttl=settings.JOB_TTL
         )
         
-        # Publish to response queue
         await self.queue.publish_response(job_id, async_response)
-        
         logger.debug(f"Updated job {job_id} status to {status}")
-    
-    async def get_job_status(self, job_id: str) -> ChatAsyncResponse:
-        """Get job status from Redis."""
-        cache_key = f"job:{job_id}"
-        cached = await self.cache.get(cache_key)
-        
-        if cached:
-            data = json.loads(cached) if isinstance(cached, str) else cached
-            return ChatAsyncResponse(**data)
-        
-        # Job not found
-        return ChatAsyncResponse(
-            job_id=job_id,
-            status=JobStatus.PENDING,
-            idempotency_key=job_id
-        )
