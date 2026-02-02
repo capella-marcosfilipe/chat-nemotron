@@ -20,6 +20,10 @@ Aceito contribuições e sugestões para melhorias! Entre em contato comigo via 
 - 2GB RAM
 - API Key da NVIDIA (gratuita em <https://build.nvidia.com>)
 
+### Dica para desenvolvimento/debug
+
+Para depuração mais rápida, prefira ambientes virtuais criados com `python -m venv .venv` ao invés de conda. O venv inicializa mais rápido e consome menos recursos.
+
 ## Endpoints disponíveis
 
 - `POST /chat/auto`: Interage com o modelo Nemotron preferencialmente em GPU local, ou via API oficial da NVIDIA como fallback.

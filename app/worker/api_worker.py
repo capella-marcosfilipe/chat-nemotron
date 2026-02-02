@@ -1,9 +1,15 @@
 import asyncio
+import debugpy
 
 from app.model import ChatRequest
 from app.service.nemotron_service import nemotron_service
 from app.utils.logger import logger
 from app.worker.base_worker import BaseWorker
+
+
+DEBUG_PORT = 49123
+debugpy.listen(("0.0.0.0", DEBUG_PORT))
+print(f"🔍 Debugger is listening on 0.0.0.0:{DEBUG_PORT}")
 
 
 class APIWorker(BaseWorker):

@@ -1,6 +1,13 @@
 from fastapi import FastAPI
 from app.controller.chat_controller import router as chat_router
 from app.config.settings import settings
+import uvicorn
+import os
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -26,13 +33,11 @@ async def health_check():
 
 
 if __name__ == "__main__":
-    import uvicorn
-    import os
-    
+    reload_flag = os.getenv("RELOAD", "False").lower() == "true"
     uvicorn.run(
         "app.main:app",
         host=os.getenv("HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "8000")),
-        reload=os.getenv("RELOAD", "True").lower() == "true",
+        reload=reload_flag,
         log_level="info"
     )

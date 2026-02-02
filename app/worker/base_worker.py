@@ -64,14 +64,14 @@ class BaseWorker(ABC):
         logger.info(f"✅ {self.queue_type.upper()} Worker shutdown complete")
     
     async def process_message(self, message: AbstractIncomingMessage, queue_type: QueueType):
-        """Process a single message from the queue."""
         job_id = None
+        idempotency_key = None
         
         try:
-            # Parse message
             body = json.loads(message.body.decode())
             job_id = body.get("job_id")
             request_data = body.get("request")
+            idempotency_key = request_data.get("idempotency_key")
             target_mode = body.get("target_mode")
             
             logger.info(
@@ -81,14 +81,11 @@ class BaseWorker(ABC):
             
             # Validate message is for this worker
             if target_mode != self.queue_type:
-                logger.warning(
-                    f"⚠️  Job {job_id} target_mode={target_mode} but received by "
-                    f"{self.queue_type} worker. Skipping."
-                )
+                logger.warning(f"⚠️  Wrong queue. Skipping job {job_id}")
                 return
             
             # Update job status to PROCESSING
-            await self._update_job_status(job_id, JobStatus.PROCESSING)
+            await self._update_job_status(job_id, JobStatus.PROCESSING, idempotency_key=idempotency_key)
             
             # Create ChatRequest from data
             chat_request = ChatRequest(**request_data)
@@ -97,27 +94,21 @@ class BaseWorker(ABC):
             result = await self._process_with_retry(job_id, chat_request)
             
             # Update job status to COMPLETED
-            await self._update_job_status(
-                job_id, 
-                JobStatus.COMPLETED,
-                result=result
-            )
+            await self._update_job_status(job_id, JobStatus.COMPLETED, result=result, idempotency_key=idempotency_key)
             
             logger.info(f"✅ [{self.queue_type.upper()}] Job {job_id} completed successfully")
-        
-        except Exception as e:
-            logger.error(
-                f"❌ [{self.queue_type.upper()}] Job {job_id} failed: {e}",
-                exc_info=True
-            )
             
-            # Update job status to FAILED
-            if job_id:
-                await self._update_job_status(
-                    job_id,
-                    JobStatus.FAILED,
-                    error=str(e)
-                )
+        except Exception as e:
+            logger.error(f"❌ [{self.queue_type.upper()}] Job {job_id} failed: {e}", exc_info=True)
+            
+            try:
+                if job_id:
+                    await self._update_job_status(job_id, JobStatus.FAILED, error=str(e), idempotency_key=idempotency_key)
+            except Exception as status_error:
+                logger.error(f"Failed to update FAILED status for job {job_id}: {status_error}")
+            
+            raise
+
     
     @retry_policy.with_retry(
         max_retries=settings.MAX_RETRIES,
@@ -163,24 +154,19 @@ class BaseWorker(ABC):
         job_id: str,
         status: JobStatus,
         result: Optional[ChatResponse] = None,
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        idempotency_key: Optional[str] = None
     ):
         """Update job status in Redis and publish to response queue."""
         
         async_response = ChatAsyncResponse(
             job_id=job_id,
             status=status,
-            idempotency_key=job_id,
+            idempotency_key=idempotency_key or job_id,
             result=result,
             error=error
         )
         
         cache_key = f"job:{job_id}"
-        await self.cache.set(
-            cache_key,
-            async_response.model_dump(mode='json'),
-            ttl=settings.JOB_TTL
-        )
-        
+        await self.cache.set(cache_key, async_response.model_dump(mode='json'), ttl=settings.JOB_TTL)
         await self.queue.publish_response(job_id, async_response)
-        logger.debug(f"Updated job {job_id} status to {status}")
