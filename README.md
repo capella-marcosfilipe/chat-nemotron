@@ -14,86 +14,18 @@ Aceito contribuições e sugestões para melhorias! Entre em contato comigo via 
 
 ---
 
-## 🚀 Início Rápido
-
-### 1. Pré-requisitos
-
-- **Python 3.10+**
-- **Docker Desktop** (para Redis e RabbitMQ)
-- **NVIDIA API Key** (gratuita em <https://build.nvidia.com>)
-
-### 2. Setup em 4 Passos
-
-```powershell
-# 1. Clonar e entrar no diretório
-cd nemotron-chat-microservice
-
-# 2. Criar ambiente virtual e instalar dependências
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
-# 3. Configurar variáveis de ambiente
-copy .env.example .env
-# Edite .env e adicione sua NVIDIA_API_KEY
-
-# 4. Iniciar infraestrutura (Redis + RabbitMQ)
-docker-compose up -d
-```
-
-### 3. Executar a Aplicação (3 terminais)
-
-**Terminal 1 - API:**
-
-```powershell
-.venv\Scripts\Activate.ps1
-python app/main.py
-```
-
-**Terminal 2 - Worker API:**
-
-```powershell
-.venv\Scripts\Activate.ps1
-python app/run_api_worker.py
-```
-
-**Terminal 3 (Opcional) - Worker GPU:**
-
-```powershell
-.venv\Scripts\Activate.ps1
-python app/run_gpu_worker.py  # Apenas se tiver GPU NVIDIA
-```
-
-### 4. Testar
-
-```powershell
-# Abrir Swagger UI
-start http://localhost:8000/docs
-
-# Ou executar teste automatizado
-python test_flow.py
-```
-
----
-
-## 📚 Documentação Completa
-
-- **[Guia de Desenvolvimento e Debug](DEV_GUIDE.md)** - Setup detalhado, debug com VS Code, troubleshooting
-- **[Swagger UI](http://localhost:8000/docs)** - Documentação interativa da API
-- **[RabbitMQ Management](http://localhost:15672)** - Monitorar filas (user: guest, pass: guest)
-
----
-
 ## 🎯 Arquitetura
 
-```
+```text
 ┌─────────────┐
 │   FastAPI   │ ← Recebe requisições HTTP
 └──────┬──────┘
        │
-       ├─→ POST /chat/auto  → Roteia para GPU ou API
-       ├─→ POST /chat/gpu   → Força GPU queue
-       └─→ POST /chat/api   → Força API queue
+       └─→ POST /chat?mode={auto|gpu|api}
+           │
+           ├─→ mode=auto  → Roteia para GPU ou API
+           ├─→ mode=gpu   → Força GPU queue
+           └─→ mode=api   → Força API queue
        │
        ↓
 ┌──────────────────────────────────────┐
@@ -117,7 +49,7 @@ python test_flow.py
 
 **Fluxo:**
 
-1. Cliente envia POST para `/chat/auto`, `/chat/gpu` ou `/chat/api`
+1. Cliente envia POST para `/chat?mode={auto|gpu|api}`
 2. API retorna `job_id` imediatamente (status: PENDING)
 3. Mensagem é publicada na fila apropriada (GPU ou API)
 4. Worker consome mensagem e processa (status: PROCESSING)
@@ -132,15 +64,12 @@ python test_flow.py
 - 2GB RAM
 - API Key da NVIDIA (gratuita em <https://build.nvidia.com>)
 
-### Dica para desenvolvimento/debug
-
-Para depuração mais rápida, prefira ambientes virtuais criados com `python -m venv .venv` ao invés de conda. O venv inicializa mais rápido e consome menos recursos.
-
 ## Endpoints disponíveis
 
-- `POST /chat/auto`: Interage com o modelo Nemotron preferencialmente em GPU local, ou via API oficial da NVIDIA como fallback (assíncrono)
-- `POST /chat/gpu`: Interage com o modelo Nemotron exclusivamente em GPU local (assíncrono)
-- `POST /chat/api`: Interage com o modelo Nemotron exclusivamente via API oficial da NVIDIA (assíncrono)
+- `POST /chat?mode={auto|gpu|api}`: Interage com o modelo Nemotron com modo configurável via query parameter (assíncrono)
+  - `mode=auto` (default): Roteia para GPU local preferencialmente, ou API da NVIDIA como fallback
+  - `mode=gpu`: Força execução exclusiva em GPU local
+  - `mode=api`: Força execução exclusiva via API oficial da NVIDIA
 - `GET /chat/status/{job_id}`: Consulta o status e resultado de um job
 - `GET /chat/info`: Fornece informações sobre os modos disponíveis (GPU local e API oficial da NVIDIA)
 
@@ -148,7 +77,7 @@ Swagger UI disponível em `/docs` para testes interativos.
 
 ## Formato das requisições
 
-As requisições para os endpoints de chat (`/chat/auto`, `/chat/gpu`, `/chat/api`) devem ser feitas no formato JSON com a seguinte estrutura mínima:
+As requisições para o endpoint de chat (`POST /chat`) devem ser feitas no formato JSON com a seguinte estrutura mínima:
 
 ```json
 {
@@ -156,15 +85,30 @@ As requisições para os endpoints de chat (`/chat/auto`, `/chat/gpu`, `/chat/ap
 }
 ```
 
-Outros campos opcionais podem ser incluídos conforme necessário, como contexto adicional ou parâmetros de configuração. Como no exemplo completo abaixo:
+Outros campos opcionais podem ser incluídos conforme necessário. Exemplo completo:
 
 ```json
 {
   "message": "Olá, como você está?",
   "max_tokens": 256,
   "temperature": 0.7,
-  "use_reasoning": true
+  "use_reasoning": true,
+  "idempotency_key": "uuid-gerado-pelo-cliente"
 }
+```
+
+**Modo de Execução via Query Parameter:**
+
+```bash
+# AUTO (default) - Prefere GPU, fallback para API
+POST /chat
+POST /chat?mode=auto
+
+# GPU - Força GPU local (retorna 503 se indisponível)
+POST /chat?mode=gpu
+
+# API - Força NVIDIA API (sempre disponível, suporta reasoning)
+POST /chat?mode=api
 ```
 
 ### Resposta Assíncrona (imediata)
