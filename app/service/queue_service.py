@@ -165,7 +165,7 @@ class QueueService:
     
     async def consume_queue(self, queue_type: QueueType, callback: Callable):
         """
-        Consume messages from specific queue.
+        Consume messages from specific queue with proper ACK/NACK handling.
         
         Args:
             queue_type: Which queue to consume ("gpu" or "api")
@@ -185,15 +185,22 @@ class QueueService:
         
         async with queue.iterator() as queue_iter:
             async for message in queue_iter:
-                async with message.process():
-                    try:
+                try:
+                    # Process message with automatic ACK on success
+                    async with message.process(requeue=False):
                         await callback(message, queue_type)
-                    except Exception as e:
-                        logger.error(
-                            f"Error processing {queue_type} message: {e}",
-                            exc_info=True
-                        )
-                        raise
+                        # If we get here, message is automatically ACKed
+                        logger.debug(f"✓ Message {message.message_id} ACKed")
+                        
+                except Exception as e:
+                    # Message will be NACKed automatically by the context manager
+                    # requeue=False means it goes to DLQ if configured
+                    logger.error(
+                        f"✗ Error processing {queue_type} message {message.message_id}: {e}",
+                        exc_info=True
+                    )
+                    # Exception is logged but not re-raised to continue processing
+                    # The message was already NACKed by the context manager
     
     async def publish_response(self, job_id: str, response: ChatAsyncResponse):
         """Publish chat response."""

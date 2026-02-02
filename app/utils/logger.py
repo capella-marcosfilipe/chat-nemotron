@@ -29,15 +29,25 @@ class Logger:
         Logger._initialized = True
     
     def _setup_handlers(self):
-        """Setup console and file handlers."""
-        # Console handler
+        """Setup console and file handlers with UTF-8 encoding."""
+        # Console handler with UTF-8 encoding for Windows
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(logging.INFO)
         
-        # File handler
+        # Force UTF-8 encoding on Windows to support emojis
+        if hasattr(sys.stdout, 'reconfigure'):
+            try:
+                sys.stdout.reconfigure(encoding='utf-8')
+            except Exception:
+                pass  # Fallback if reconfigure fails
+        
+        # File handler with UTF-8 encoding
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
-        file_handler = logging.FileHandler(log_dir / "nemotron.log")
+        file_handler = logging.FileHandler(
+            log_dir / "nemotron.log",
+            encoding='utf-8'
+        )
         file_handler.setLevel(logging.DEBUG)
         
         # Formatter

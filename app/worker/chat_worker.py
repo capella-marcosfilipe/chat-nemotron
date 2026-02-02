@@ -15,6 +15,10 @@ class ChatWorker:
     
     async def get_job_status(self, job_id: str) -> ChatAsyncResponse:
         """Get job status from Redis."""
+        # Ensure Redis is connected
+        if self.cache.client is None:
+            await self.cache.connect()
+        
         cache_key = f"job:{job_id}"
         cached = await self.cache.get(cache_key)
         

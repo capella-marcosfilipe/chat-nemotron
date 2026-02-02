@@ -3,7 +3,12 @@ Run API Worker.
 Usage: python -m app.run_api_worker
 """
 import asyncio
-from app.worker.api_worker import main
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from app.worker.api_worker import main  # noqa: E402
+
 
 if __name__ == "__main__":
     print("=" * 60)

@@ -1,15 +1,10 @@
 import asyncio
-import debugpy
+import os
 
 from app.model import ChatRequest
 from app.service.nemotron_service import nemotron_service
 from app.utils.logger import logger
 from app.worker.base_worker import BaseWorker
-
-
-DEBUG_PORT = 49123
-debugpy.listen(("0.0.0.0", DEBUG_PORT))
-print(f"🔍 Debugger is listening on 0.0.0.0:{DEBUG_PORT}")
 
 
 class APIWorker(BaseWorker):
@@ -60,4 +55,16 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Enable debugpy only when running worker directly
+    enable_debug = os.getenv("ENABLE_WORKER_DEBUG", "false").lower() == "true"
+    
+    if enable_debug:
+        try:
+            import debugpy
+            DEBUG_PORT = 49123
+            debugpy.listen(("0.0.0.0", DEBUG_PORT))
+            print(f"🔍 Debugger is listening on 0.0.0.0:{DEBUG_PORT}")
+        except Exception as e:
+            print(f"⚠️  Could not start debugger: {e}")
+    
     asyncio.run(main())

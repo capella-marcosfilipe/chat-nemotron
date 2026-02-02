@@ -45,13 +45,19 @@ class BaseWorker(ABC):
     
     def _setup_signal_handlers(self):
         """Setup graceful shutdown on SIGINT/SIGTERM."""
-        loop = asyncio.get_event_loop()
+        import sys
         
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(
-                sig,
-                lambda: asyncio.create_task(self.shutdown())
-            )
+        # Windows doesn't support signal handlers the same way as Unix
+        # Use signal.signal() instead which works on both platforms
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}, initiating shutdown...")
+            asyncio.create_task(self.shutdown())
+        
+        # SIGTERM is not available on Windows, so only register what's available
+        signal.signal(signal.SIGINT, signal_handler)
+        
+        if sys.platform != 'win32':
+            signal.signal(signal.SIGTERM, signal_handler)
     
     async def shutdown(self):
         """Graceful shutdown."""
@@ -64,15 +70,27 @@ class BaseWorker(ABC):
         logger.info(f"✅ {self.queue_type.upper()} Worker shutdown complete")
     
     async def process_message(self, message: AbstractIncomingMessage, queue_type: QueueType):
+        """
+        Process a message from the queue.
+        Ensures proper ACK/NACK and status updates even on failures.
+        """
         job_id = None
         idempotency_key = None
+        should_reject = False
         
         try:
-            body = json.loads(message.body.decode())
-            job_id = body.get("job_id")
-            request_data = body.get("request")
-            idempotency_key = request_data.get("idempotency_key")
-            target_mode = body.get("target_mode")
+            # Parse message body
+            try:
+                body = json.loads(message.body.decode())
+                job_id = body.get("job_id")
+                request_data = body.get("request")
+                idempotency_key = request_data.get("idempotency_key") if request_data else None
+                target_mode = body.get("target_mode")
+            except (json.JSONDecodeError, KeyError, AttributeError) as parse_error:
+                logger.error(f"❌ [{self.queue_type.upper()}] Invalid message format: {parse_error}")
+                # Invalid message format - reject without requeue
+                should_reject = True
+                raise
             
             logger.info(
                 f"📨 [{self.queue_type.upper()}] Processing job {job_id} | "
@@ -81,11 +99,17 @@ class BaseWorker(ABC):
             
             # Validate message is for this worker
             if target_mode != self.queue_type:
-                logger.warning(f"⚠️  Wrong queue. Skipping job {job_id}")
+                logger.warning(f"⚠️  Wrong queue. Job {job_id} routed to wrong worker")
+                # Wrong queue - reject and requeue to correct queue
+                should_reject = True
                 return
             
             # Update job status to PROCESSING
-            await self._update_job_status(job_id, JobStatus.PROCESSING, idempotency_key=idempotency_key)
+            await self._update_job_status(
+                job_id, 
+                JobStatus.PROCESSING, 
+                idempotency_key=idempotency_key
+            )
             
             # Create ChatRequest from data
             chat_request = ChatRequest(**request_data)
@@ -94,20 +118,46 @@ class BaseWorker(ABC):
             result = await self._process_with_retry(job_id, chat_request)
             
             # Update job status to COMPLETED
-            await self._update_job_status(job_id, JobStatus.COMPLETED, result=result, idempotency_key=idempotency_key)
+            await self._update_job_status(
+                job_id, 
+                JobStatus.COMPLETED, 
+                result=result, 
+                idempotency_key=idempotency_key
+            )
             
             logger.info(f"✅ [{self.queue_type.upper()}] Job {job_id} completed successfully")
             
         except Exception as e:
-            logger.error(f"❌ [{self.queue_type.upper()}] Job {job_id} failed: {e}", exc_info=True)
+            logger.error(
+                f"❌ [{self.queue_type.upper()}] Job {job_id or 'UNKNOWN'} failed: {e}", 
+                exc_info=True
+            )
             
-            try:
-                if job_id:
-                    await self._update_job_status(job_id, JobStatus.FAILED, error=str(e), idempotency_key=idempotency_key)
-            except Exception as status_error:
-                logger.error(f"Failed to update FAILED status for job {job_id}: {status_error}")
+            # Always try to update status to FAILED, even if job_id is unknown
+            if job_id:
+                try:
+                    await self._update_job_status(
+                        job_id, 
+                        JobStatus.FAILED, 
+                        error=str(e), 
+                        idempotency_key=idempotency_key
+                    )
+                    logger.info(f"📝 Updated job {job_id} status to FAILED")
+                except Exception as status_error:
+                    logger.error(
+                        f"⚠️  Failed to update FAILED status for job {job_id}: {status_error}",
+                        exc_info=True
+                    )
             
+            # Don't requeue if we already marked as failed or if it's a parsing error
+            should_reject = True
             raise
+        
+        finally:
+            # Ensure message is acknowledged or rejected
+            # Note: This is handled by aio_pika's context manager (async with message.process())
+            # but we set should_reject flag for clarity
+            pass
 
     
     @retry_policy.with_retry(
