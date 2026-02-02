@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from app.service.queue_service import queue_service, QueueType
 from app.worker.chat_worker import ChatWorker
 from app.model import ChatRequest, ChatAsyncResponse, SystemInfoResponse, ExecutionMode, JobStatus
@@ -30,7 +30,7 @@ async def _route_to_queue(request: ChatRequest) -> tuple[str, QueueType]:
         if not nemotron_engine.cuda_available:
             raise HTTPException(
                 status_code=503,
-                detail="GPU mode requested but not available. Use /auto or /api instead."
+                detail="GPU mode requested but not available. Use mode=auto or mode=api instead."
             )
         target_mode: QueueType = "gpu"
     
@@ -66,20 +66,44 @@ async def get_system_info():
     )
 
 
-@router.post("/auto", response_model=ChatAsyncResponse)
-@idempotency.idempotent("chat_auto")
-async def chat_auto(request: ChatRequest):
-    """
-    **AUTO MODE**: Intelligent queue routing.
+@router.post("", response_model=ChatAsyncResponse)
+@idempotency.idempotent("chat")
+async def chat(
+    request: ChatRequest,
+    mode: ExecutionMode = Query(
+        default=ExecutionMode.AUTO,
+        description="Execution mode: auto (intelligent routing), gpu (force GPU), api (force NVIDIA API)"
+    )
+):
+    """Send chat request with configurable execution mode.
     
-    - Automatically chooses GPU queue if available
-    - Falls back to API queue if GPU unavailable
-    - Returns immediately with job_id
-    - Check status with GET /status/{job_id}
+    Unified endpoint for chat requests with three execution modes:
+    
+    - auto: Intelligent routing (prefers GPU, falls back to API if unavailable)
+    - gpu: Force native GPU inference (local model, lower latency, no reasoning tokens)
+    - api: Force NVIDIA API (always available, supports reasoning tokens)
+    
+    Args:
+        request (ChatRequest): Chat request with message and generation parameters.
+        mode (ExecutionMode, optional): Execution mode via query parameter.
+            Defaults to ExecutionMode.AUTO.
+    
+    Returns:
+        ChatAsyncResponse: Response containing job_id, status (PENDING), and idempotency_key.
+            Use GET /status/{job_id} to check completion status.
+    
+    Raises:
+        HTTPException: 503 if GPU mode requested but GPU not available.
+        HTTPException: 500 for internal errors during request processing.
+    
+    Examples:
+        POST /chat?mode=auto - Intelligent routing (default)
+        POST /chat?mode=gpu - Force GPU only
+        POST /chat?mode=api - Force API only
     """
     try:
-        # Force AUTO mode
-        request.mode = ExecutionMode.AUTO
+        # Override mode from query parameter
+        request.mode = mode
         
         job_id, target_queue = await _route_to_queue(request)
         
@@ -92,66 +116,7 @@ async def chat_auto(request: ChatRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in /auto: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-
-@router.post("/gpu", response_model=ChatAsyncResponse)
-@idempotency.idempotent("chat_gpu")
-async def chat_gpu(request: ChatRequest):
-    """
-    **GPU MODE**: Force GPU queue.
-    
-    - Sends request to GPU-specific queue
-    - Returns 503 if GPU not available
-    - Processed by GPU worker only
-    - Returns immediately with job_id
-    """
-    try:
-        # Force GPU mode
-        request.mode = ExecutionMode.GPU
-        
-        job_id, target_queue = await _route_to_queue(request)
-        
-        return ChatAsyncResponse(
-            job_id=job_id,
-            status=JobStatus.PENDING,
-            idempotency_key=request.idempotency_key
-        )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in /gpu: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-
-@router.post("/api", response_model=ChatAsyncResponse)
-@idempotency.idempotent("chat_api")
-async def chat_api(request: ChatRequest):
-    """
-    **API MODE**: Force API queue.
-    
-    - Sends request to API-specific queue
-    - Always available
-    - Supports reasoning tokens
-    - Processed by API worker only
-    - Returns immediately with job_id
-    """
-    try:
-        # Force API mode
-        request.mode = ExecutionMode.API
-        
-        job_id, target_queue = await _route_to_queue(request)
-        
-        return ChatAsyncResponse(
-            job_id=job_id,
-            status=JobStatus.PENDING,
-            idempotency_key=request.idempotency_key
-        )
-    
-    except Exception as e:
-        logger.error(f"Error in /api: {e}")
+        logger.error(f"Error in /chat (mode={mode}): {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
