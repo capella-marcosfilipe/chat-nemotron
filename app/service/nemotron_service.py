@@ -1,7 +1,13 @@
-from engine.nemotron import nemotron_engine, EngineMode
 from typing import Generator
-from openai.types.chat import ChatCompletionUserMessageParam, ChatCompletionSystemMessageParam
+
 import torch
+from openai.types.chat import (ChatCompletionSystemMessageParam,
+                               ChatCompletionUserMessageParam)
+
+from app.engine.nemotron import EngineMode, nemotron_engine
+from app.utils.logger import Logger
+
+logger = Logger()
 
 
 class NemotronService:
@@ -117,7 +123,31 @@ class NemotronService:
             extra_body=extra_body
         )
         
-        return completion.choices[0].message.content or ""
+        # Extrair resposta (pode vir em content ou reasoning_content)
+        choice = completion.choices[0]
+        message = choice.message
+        
+        # Log para debug
+        logger.debug(f"[API] Response fields: content={bool(message.content)}, "
+                    f"has_reasoning={hasattr(message, 'reasoning_content')}")
+        
+        # Tentar pegar do content primeiro
+        response = message.content
+        
+        # Se vazio e tem reasoning, pegar do reasoning_content
+        if not response and hasattr(message, 'reasoning_content'):
+            response = message.reasoning_content
+            logger.debug("[API] Using reasoning_content")
+        
+        # Se ainda vazio, verificar se tem refusal
+        if not response and hasattr(message, 'refusal'):
+            response = message.refusal
+            logger.warning("[API] Response was refused")
+        
+        if not response:
+            logger.error(f"[API] Empty response! Message object: {message}")
+        
+        return response or ""
     
     def generate_response(
         self,

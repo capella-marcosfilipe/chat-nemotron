@@ -1,6 +1,6 @@
 # Nemotron Chat API
 
-*Marcos Filipe Capella* - <https://marcoscapella.com.br> - LinkedIn: <https://www.linkedin.com/in/capella-marcosfilipe/>
+_Marcos Filipe Capella_ - <https://marcoscapella.com.br> - LinkedIn: <https://www.linkedin.com/in/capella-marcosfilipe/>
 
 ---
 
@@ -8,9 +8,53 @@ Este é um projeto pessoal para interagir com o modelo de linguagem Nemotron da 
 
 Esta aplicação é pensada como microsserviço para ser integrada em outras aplicações, como chatbots, assistentes virtuais, ou qualquer sistema que se beneficie de capacidades avançadas de processamento de linguagem natural.
 
-Os endpoints estão disponíveis para uso automático (GPU-first com fallback para API) ou para uso manual em cada modo. Um endpoint adicional fornece informações sobre os modos disponíveis.
+**Arquitetura:** Sistema assíncrono baseado em filas (RabbitMQ) com workers dedicados para GPU e API, usando Redis para cache e gerenciamento de jobs.
 
 Aceito contribuições e sugestões para melhorias! Entre em contato comigo via LinkedIn ou e-mail > <marcoscapella@outlook.com>. Estou sempre atento a novas ideias e colaborações.
+
+---
+
+## 🎯 Arquitetura
+
+```text
+┌─────────────┐
+│   FastAPI   │ ← Recebe requisições HTTP
+└──────┬──────┘
+       │
+       └─→ POST /chat?mode={auto|gpu|api}
+           │
+           ├─→ mode=auto  → Roteia para GPU ou API
+           ├─→ mode=gpu   → Força GPU queue
+           └─→ mode=api   → Força API queue
+       │
+       ↓
+┌──────────────────────────────────────┐
+│         RabbitMQ Queues              │
+│  ┌─────────────┐  ┌─────────────┐   │
+│  │  GPU Queue  │  │  API Queue  │   │
+│  └──────┬──────┘  └──────┬──────┘   │
+└─────────┼─────────────────┼──────────┘
+          │                 │
+    ┌─────▼──────┐   ┌─────▼──────┐
+    │GPU Worker  │   │ API Worker │
+    │(Local GPU) │   │(NVIDIA API)│
+    └─────┬──────┘   └─────┬──────┘
+          │                │
+          └────────┬───────┘
+                   ↓
+            ┌──────────────┐
+            │    Redis     │ ← Armazena status dos jobs
+            └──────────────┘
+```
+
+**Fluxo:**
+
+1. Cliente envia POST para `/chat?mode={auto|gpu|api}`
+2. API retorna `job_id` imediatamente (status: PENDING)
+3. Mensagem é publicada na fila apropriada (GPU ou API)
+4. Worker consome mensagem e processa (status: PROCESSING)
+5. Resultado é salvo no Redis (status: COMPLETED ou FAILED)
+6. Cliente consulta GET `/chat/status/{job_id}` para obter resultado
 
 ---
 
@@ -22,16 +66,18 @@ Aceito contribuições e sugestões para melhorias! Entre em contato comigo via 
 
 ## Endpoints disponíveis
 
-- `POST /chat/auto`: Interage com o modelo Nemotron preferencialmente em GPU local, ou via API oficial da NVIDIA como fallback.
-- `POST /chat/gpu`: Interage com o modelo Nemotron exclusivamente em GPU local.
-- `POST /chat/api`: Interage com o modelo Nemotron exclusivamente via API oficial da NVIDIA.
-- `GET /modes`: Fornece informações sobre os modos disponíveis (GPU local e API oficial da NVIDIA).
+- `POST /chat?mode={auto|gpu|api}`: Interage com o modelo Nemotron com modo configurável via query parameter (assíncrono)
+  - `mode=auto` (default): Roteia para GPU local preferencialmente, ou API da NVIDIA como fallback
+  - `mode=gpu`: Força execução exclusiva em GPU local
+  - `mode=api`: Força execução exclusiva via API oficial da NVIDIA
+- `GET /chat/status/{job_id}`: Consulta o status e resultado de um job
+- `GET /chat/info`: Fornece informações sobre os modos disponíveis (GPU local e API oficial da NVIDIA)
 
 Swagger UI disponível em `/docs` para testes interativos.
 
 ## Formato das requisições
 
-As requisições para os endpoints de chat (`/chat/auto`, `/chat/gpu`, `/chat/api`) devem ser feitas no formato JSON com a seguinte estrutura mínima:
+As requisições para o endpoint de chat (`POST /chat`) devem ser feitas no formato JSON com a seguinte estrutura mínima:
 
 ```json
 {
@@ -39,7 +85,7 @@ As requisições para os endpoints de chat (`/chat/auto`, `/chat/gpu`, `/chat/ap
 }
 ```
 
-Outros campos opcionais podem ser incluídos conforme necessário, como contexto adicional ou parâmetros de configuração. Como no exemplo completo abaixo:
+Outros campos opcionais podem ser incluídos conforme necessário. Exemplo completo:
 
 ```json
 {
@@ -47,15 +93,73 @@ Outros campos opcionais podem ser incluídos conforme necessário, como contexto
   "max_tokens": 256,
   "temperature": 0.7,
   "use_reasoning": true,
-  "stream": false
+  "idempotency_key": "uuid-gerado-pelo-cliente"
 }
 ```
 
-A resposta será retornada no formato JSON com a seguinte estrutura:
+**Modo de Execução via Query Parameter:**
+
+```bash
+# AUTO (default) - Prefere GPU, fallback para API
+POST /chat
+POST /chat?mode=auto
+
+# GPU - Força GPU local (retorna 503 se indisponível)
+POST /chat?mode=gpu
+
+# API - Força NVIDIA API (sempre disponível, suporta reasoning)
+POST /chat?mode=api
+```
+
+### Resposta Assíncrona (imediata)
+
+A API retorna imediatamente com um job_id:
 
 ```json
 {
-  "response": "Resposta do modelo aqui",
-  "mode": "Modo utilizado (gpu ou api)"
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "pending",
+  "idempotency_key": "..."
+}
+```
+
+### Consultar Status do Job
+
+Use o endpoint `/chat/status/{job_id}`:
+
+**Processando:**
+
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "processing",
+  "created_at": "2026-02-02T10:30:00Z",
+  "result": null
+}
+```
+
+**Completado:**
+
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "created_at": "2026-02-02T10:30:00Z",
+  "result": {
+    "response": "Resposta do modelo aqui",
+    "mode": "api",
+    "latency_ms": 1250.5
+  }
+}
+```
+
+**Falha:**
+
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "failed",
+  "created_at": "2026-02-02T10:30:00Z",
+  "error": "Descrição do erro"
 }
 ```
